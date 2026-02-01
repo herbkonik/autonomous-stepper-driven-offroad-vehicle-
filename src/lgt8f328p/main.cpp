@@ -1,22 +1,23 @@
 /*
- * MC1 - 4-Wheel Stepper Car - Antrieb & Lenkung
+ * MC1 - 4-Wheel Stepper Car - Drive & Steering
  *
  * Hardware:
  * - LGT8F328P LQFP48 MiniEVB (16MHz, 3.3V)
- * - 4× NEMA17 Stepper mit MKS Servo42C (FOC)
- * - 4× MG946R Servos (Lenkung)
+ * - 4× NEMA17 Stepper with MKS Servo42C (FOC)
+ * - 4× MG946R Servos (Steering)
  *
- * Funktionen:
- * - Timer-gesteuerte Motorsteuerung (non-blocking)
- * - Rampen für Motoren (sanftes Beschleunigen/Bremsen)
- * - Rampen für Servos (sanftes Lenken)
- * - Sprechende Namen für alle Komponenten
- * - High-Level Funktionen für Fahrmanöver
- * - I2C Slave Interface mit Register-System (für MC2 Kommunikation)
+ * Features:
+ * - Timer-controlled motor management (non-blocking)
+ * - Ramps for motors (smooth acceleration/deceleration)
+ * - Ramps for servos (smooth steering)
+ * - Descriptive names for all components
+ * - High-level functions for driving maneuvers
+ * - I2C Slave interface with register system (for MC2 communication)
  *
  * Author: Herbert Kozuschnik
+ * License: GPLv3 ( https://www.gnu.org/licenses/gpl-3.0.html.en )
  * Date: 2026-01-24
- * Version: 0.3 (I2C Slave - Produktiv)
+ * Version: 0.3 (I2C Slave - Production)
  */
 
 #include <Arduino.h>
@@ -25,71 +26,71 @@
 #include "Functions.h"
 
 // ============================================================================
-// KONSTANTEN & PIN-DEFINITIONEN
+// CONSTANTS & PIN DEFINITIONS
 // ============================================================================
 
-// Motor IDs (sprechende Namen)
+// Motor IDs (descriptive names)
 #define MOTOR_FRONT_LEFT 0  // Step=3, Dir=4, Enable=31
 #define MOTOR_FRONT_RIGHT 1 // Step=34, Dir=2, Enable=33
 #define MOTOR_REAR_LEFT 2   // Step=9, Dir=10, Enable=11
 #define MOTOR_REAR_RIGHT 3  // Step=21, Dir=25, Enable=20
 
-// Servo IDs - MIT DUMMY wegen ServoTimer2 Bug!
-#define SERVO_DUMMY 0       // NICHT BENUTZEN! (ServoTimer2 Bug Workaround)
+// Servo IDs - WITH DUMMY due to ServoTimer2 Bug!
+#define SERVO_DUMMY 0       // DO NOT USE! (ServoTimer2 Bug Workaround)
 #define SERVO_FRONT_LEFT 1  // Pin=5
 #define SERVO_FRONT_RIGHT 2 // Pin=24
 #define SERVO_REAR_LEFT 3   // Pin=12
 #define SERVO_REAR_RIGHT 4  // Pin=26
 
-// Motor Pin Definitionen
+// Motor Pin Definitions
 const byte motorStepPin[4] = {3, 34, 9, 21};
 const byte motorDirPin[4] = {4, 2, 10, 25};
 const byte motorEnablePin[4] = {31, 33, 11, 20};
 
-// Servo Pin Definitionen - MIT DUMMY PIN!
-const byte servoPin[5] = {99, 5, 24, 12, 26}; // Pin 99 = Dummy, wird nie benutzt
+// Servo Pin Definitions - WITH DUMMY PIN!
+const byte servoPin[5] = {99, 5, 24, 12, 26}; // Pin 99 = Dummy, never used
 
-// Servo Kalibrierung (in Mikrosekunden)
-constexpr int SERVO_CENTER = 1500; // Geradeaus
-constexpr int SERVO_MIN = 600;     // Max links (-90°) für 270° Servos
-constexpr int SERVO_MAX = 2400;    // Max rechts (+90°) für 270° Servos
+// Servo Calibration (in microseconds)
+constexpr int SERVO_CENTER = 1500; // Straight ahead
+constexpr int SERVO_MIN = 600;     // Max left (-90°) for 270° servos
+constexpr int SERVO_MAX = 2400;    // Max right (+90°) for 270° servos
 
-// Motor Parameter
+// Motor Parameters
 constexpr int MAX_MOTOR_SPEED = 800;              // Steps/s
-constexpr int MOTOR_ACCEL_RATE = 50;              // Steps/s² (Beschleunigung)
-constexpr unsigned long MOTOR_RAMP_INTERVAL = 50; // ms zwischen Rampenschritten
+constexpr int MOTOR_ACCEL_RATE = 50;              // Steps/s² (acceleration)
+constexpr unsigned long MOTOR_RAMP_INTERVAL = 50; // ms between ramp steps
 
-// Servo Parameter
-constexpr int SERVO_RAMP_STEP = 1;                // Grad pro Schritt
-constexpr unsigned long SERVO_RAMP_INTERVAL = 20; // ms zwischen Schritten
+// Servo Parameters
+constexpr int SERVO_RAMP_STEP = 1;                // Degrees per step
+constexpr unsigned long SERVO_RAMP_INTERVAL = 20; // ms between steps
 
-// Fahrzeugparameter
-constexpr int AXLE_TRACK = 370;    // mm (Abstand Radmitte - Radmitte)
-constexpr int AXLE_DISTANCE = 450; // mm (Abstand Vorder- Hinterachse)
+// Vehicle Parameters
+constexpr int AXLE_TRACK = 370;    // mm (distance wheel center - wheel center)
+constexpr int AXLE_DISTANCE = 450; // mm (distance front - rear axle)
 
-// I2C Konfiguration
+// I2C Configuration
 constexpr byte I2C_ADDRESS = 0x10;
 
-// I2C Register-Adressen (von MC2 beschreibbar)
-constexpr byte REG_SPEED = 0x01;    // Speed Register (-800 bis +800 Steps/s)
-constexpr byte REG_STEERING = 0x02; // Steering Register (-90 bis +90 Grad)
-constexpr byte REG_COMMAND = 0x03;  // Command Register (spezielle Befehle)
+// I2C Register Addresses (writable by MC2)
+constexpr byte REG_SPEED = 0x01;    // Speed Register (-800 to +800 Steps/s)
+constexpr byte REG_STEERING = 0x02; // Steering Register (-90 to +90 degrees)
+constexpr byte REG_COMMAND = 0x03;  // Command Register (special commands)
 
-// Update Flags (welche Register wurden aktualisiert?)
+// Update Flags (which registers were updated?)
 constexpr uint8_t FLAG_SPEED_UPDATED = 0x01;
 constexpr uint8_t FLAG_STEERING_UPDATED = 0x02;
 constexpr uint8_t FLAG_COMMAND_UPDATED = 0x04;
 
-// Command Codes für REG_COMMAND
-constexpr uint8_t CMD_STOP = 0x01;            // Normaler Stopp (mit Rampe)
-constexpr uint8_t CMD_EMERGENCY_STOP = 0xFF;  // Notaus (sofort)
-constexpr uint8_t CMD_CENTER_STEERING = 0x02; // Lenkung zentrieren
+// Command Codes for REG_COMMAND
+constexpr uint8_t CMD_STOP = 0x01;            // Normal stop (with ramp)
+constexpr uint8_t CMD_EMERGENCY_STOP = 0xFF;  // Emergency stop (immediate)
+constexpr uint8_t CMD_CENTER_STEERING = 0x02; // Center steering
 
 // ============================================================================
-// DATENSTRUKTUREN
+// DATA STRUCTURES
 // ============================================================================
 
-// Motor Struktur
+// Motor Structure
 struct Motor {
   byte stepPin;
   byte dirPin;
@@ -97,38 +98,38 @@ struct Motor {
   volatile bool running;
   volatile bool stepState;
   volatile unsigned long stepCount;
-  uint16_t stepDelay; // Aktuelle Geschwindigkeit (µs)
+  uint16_t stepDelay; // Current speed (µs)
   unsigned long lastStepTime;
 
-  // Rampen-Parameter
-  int currentSpeed; // Aktuelle Geschwindigkeit (Steps/s)
-  int targetSpeed;  // Ziel-Geschwindigkeit (Steps/s)
+  // Ramp Parameters
+  int currentSpeed; // Current speed (Steps/s)
+  int targetSpeed;  // Target speed (Steps/s)
   unsigned long lastRampTime;
 };
 
-// Servo Struktur
+// Servo Structure
 struct ServoControl {
   ServoTimer2 servo;
-  int currentAngle; // Aktueller Winkel (Grad, -90 bis +90)
-  int targetAngle;  // Ziel-Winkel (Grad, -90 bis +90)
+  int currentAngle; // Current angle (degrees, -90 to +90)
+  int targetAngle;  // Target angle (degrees, -90 to +90)
   unsigned long lastRampTime;
 };
 
 // ============================================================================
-// GLOBALE VARIABLEN
+// GLOBAL VARIABLES
 // ============================================================================
 
 Motor motors[4];
-ServoControl servos[5]; // 5 statt 4 wegen Dummy-Servo
+ServoControl servos[5]; // 5 instead of 4 due to dummy servo
 
-// I2C Register (von MC2 via I2C beschreibbar)
-volatile int16_t regSpeed = 0;       // Ziel-Geschwindigkeit (-800 bis +800)
-volatile int16_t regSteering = 0;    // Ziel-Lenkwinkel (-90 bis +90)
-volatile uint8_t regCommand = 0;     // Spezielle Befehle
-volatile uint8_t regUpdateFlags = 0; // Flags welche Register aktualisiert wurden
+// I2C Registers (writable by MC2 via I2C)
+volatile int16_t regSpeed = 0;       // Target speed (-800 to +800)
+volatile int16_t regSteering = 0;    // Target steering angle (-90 to +90)
+volatile uint8_t regCommand = 0;     // Special commands
+volatile uint8_t regUpdateFlags = 0; // Flags which registers were updated
 
 // ============================================================================
-// TIMER1 INTERRUPT (Motorsteuerung)
+// TIMER1 INTERRUPT (Motor Control)
 // ============================================================================
 
 ISR(TIMER1_COMPA_vect) {
@@ -150,7 +151,7 @@ ISR(TIMER1_COMPA_vect) {
 }
 
 // ============================================================================
-// SETUP FUNKTIONEN
+// SETUP FUNCTIONS
 // ============================================================================
 
 void setupTimer() {
@@ -158,7 +159,7 @@ void setupTimer() {
   TCCR1A = 0;
   TCCR1B = 0;
   TCNT1 = 0;
-  OCR1A = (F_CPU / 20000UL) - 1; // 20kHz Interrupt
+  OCR1A = (F_CPU / 20000UL) - 1; // 20kHz interrupt
   TCCR1B |= (1 << WGM12) | (1 << CS10);
   TIMSK1 |= (1 << OCIE1A);
   interrupts();
@@ -184,12 +185,12 @@ void setupMotors() {
 
     digitalWrite(motors[i].stepPin, LOW);
     digitalWrite(motors[i].dirPin, LOW);
-    digitalWrite(motors[i].enablePin, LOW); // Enable LOW für Servo42C
+    digitalWrite(motors[i].enablePin, LOW); // Enable LOW for Servo42C
   }
 }
 
 void setupServos() {
-  // BEGINNE BEI INDEX 1 wegen ServoTimer2 Bug (Index 0 funktioniert nicht)
+  // START AT INDEX 1 due to ServoTimer2 bug (index 0 doesn't work)
   for (byte i = 1; i < 5; i++) {
     servos[i].servo.attach(servoPin[i]);
     servos[i].currentAngle = 0;
@@ -205,14 +206,14 @@ void setupI2C() {
 }
 
 // ============================================================================
-// LOW-LEVEL MOTOR FUNKTIONEN
+// LOW-LEVEL MOTOR FUNCTIONS
 // ============================================================================
 
 void setMotorSpeed(byte motorID, int stepsPerSec) {
   if (motorID >= 4)
     return;
 
-  // Begrenzung
+  // Limit speed
   stepsPerSec = constrain(stepsPerSec, -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
   motors[motorID].targetSpeed = stepsPerSec;
 }
@@ -223,14 +224,14 @@ void updateMotorSpeed(byte motorID) {
 
   Motor &m = motors[motorID];
 
-  // Rampen-Update (nur alle MOTOR_RAMP_INTERVAL ms)
+  // Ramp update (only every MOTOR_RAMP_INTERVAL ms)
   unsigned long currentTime = millis();
   if (currentTime - m.lastRampTime < MOTOR_RAMP_INTERVAL) {
     return;
   }
   m.lastRampTime = currentTime;
 
-  // Beschleunigung/Verzögerung
+  // Acceleration/Deceleration
   if (m.currentSpeed < m.targetSpeed) {
     m.currentSpeed += MOTOR_ACCEL_RATE;
     if (m.currentSpeed > m.targetSpeed) {
@@ -243,24 +244,24 @@ void updateMotorSpeed(byte motorID) {
     }
   }
 
-  // Geschwindigkeit anwenden
+  // Apply speed
   if (m.currentSpeed == 0) {
     m.running = false;
     digitalWrite(m.stepPin, LOW);
   } else {
-    // Richtung setzen - MIT INVERTIERUNG FÜR LINKE SEITE
+    // Set direction - WITH INVERSION FOR LEFT SIDE
     bool direction = m.currentSpeed > 0;
 
-    // Invertiere linke Seite (sonst laufen links/rechts gegenläufig)
+    // Invert left side (otherwise left/right run opposite)
     if (motorID == MOTOR_FRONT_LEFT || motorID == MOTOR_REAR_LEFT) {
       direction = !direction;
     }
 
     digitalWrite(m.dirPin, direction ? HIGH : LOW);
 
-    // Step Delay berechnen
+    // Calculate step delay
     uint16_t absSpeed = abs(m.currentSpeed);
-    m.stepDelay = 500000UL / absSpeed; // Mikrosekunden
+    m.stepDelay = 500000UL / absSpeed; // Microseconds
     m.running = true;
   }
 }
@@ -281,15 +282,15 @@ void emergencyStopMotor(byte motorID) {
 }
 
 // ============================================================================
-// LOW-LEVEL SERVO FUNKTIONEN
+// LOW-LEVEL SERVO FUNCTIONS
 // ============================================================================
 
 void setServoAngle(byte servoID, int angle) {
   if (servoID >= 5 || servoID == 0)
-    return; // Index 0 = Dummy, überspringen
+    return; // Index 0 = Dummy, skip
 
-    // Begrenzung
-    angle = constrain(angle, -90, 90);
+  // Limit angle
+  angle = constrain(angle, -90, 90);
   servos[servoID].targetAngle = angle;
 }
 
@@ -299,18 +300,18 @@ void setServoAngle(byte servoID, float angle) {
 
 void updateServoAngle(byte servoID) {
   if (servoID >= 5 || servoID == 0)
-    return; // Index 0 = Dummy, überspringen
+    return; // Index 0 = Dummy, skip
 
-    ServoControl &s = servos[servoID];
+  ServoControl &s = servos[servoID];
 
-  // Rampen-Update
+  // Ramp update
   unsigned long currentTime = millis();
   if (currentTime - s.lastRampTime < SERVO_RAMP_INTERVAL) {
     return;
   }
   s.lastRampTime = currentTime;
 
-  // Winkel anpassen
+  // Adjust angle
   if (s.currentAngle < s.targetAngle) {
     s.currentAngle += SERVO_RAMP_STEP;
     if (s.currentAngle > s.targetAngle) {
@@ -323,14 +324,14 @@ void updateServoAngle(byte servoID) {
     }
   }
 
-  // Winkel in Mikrosekunden umrechnen
+  // Convert angle to microseconds
   int pulseWidth = SERVO_CENTER + map(s.currentAngle, -90, 90, -900, 900);
   pulseWidth = constrain(pulseWidth, SERVO_MIN, SERVO_MAX);
   s.servo.write(pulseWidth);
 }
 
 // ============================================================================
-// HIGH-LEVEL FUNKTIONEN (Gruppen)
+// HIGH-LEVEL FUNCTIONS (Groups)
 // ============================================================================
 
 void setAllMotorsSpeed(int speed) {
@@ -350,7 +351,7 @@ void setRightSideSpeed(int speed) {
 }
 
 void setAllSteering(int angle) {
-  for (byte i = 1; i < 5; i++) { // Starte bei 1 wegen Dummy
+  for (byte i = 1; i < 5; i++) { // Start at 1 due to dummy
     setServoAngle(i, angle);
   }
 }
@@ -374,7 +375,7 @@ void emergencyStopAll() {
 void centerAllSteering() { setAllSteering(0); }
 
 // ============================================================================
-// HIGH-LEVEL FUNKTIONEN (Fahrmanöver)
+// HIGH-LEVEL FUNCTIONS (Driving Maneuvers)
 // ============================================================================
 
 void driveForward(int speed) { setAllMotorsSpeed(-speed); }
@@ -392,11 +393,11 @@ void turnRight(int baseSpeed, int speedDifference) {
 }
 
 void steerRight(int angle) {
-  // Vorne: nach links (negativ)
+  // Front: to left (negative)
   setServoAngle(SERVO_FRONT_LEFT, -abs(angle));
   setServoAngle(SERVO_FRONT_RIGHT, -abs(angle));
 
-  // Hinten: nach rechts (positiv, invertiert!)
+  // Rear: to right (positive, inverted!)
   setServoAngle(SERVO_REAR_LEFT, abs(angle));
   setServoAngle(SERVO_REAR_RIGHT, abs(angle));
 }
@@ -404,11 +405,11 @@ void steerRight(int angle) {
 void steerRight(float angle) { steerRight((int)angle); }
 
 void steerLeft(int angle) {
-  // Vorne: nach rechts (positiv)
+  // Front: to right (positive)
   setServoAngle(SERVO_FRONT_LEFT, abs(angle));
   setServoAngle(SERVO_FRONT_RIGHT, abs(angle));
 
-  // Hinten: nach links (negativ, invertiert!)
+  // Rear: to left (negative, inverted!)
   setServoAngle(SERVO_REAR_LEFT, -abs(angle));
   setServoAngle(SERVO_REAR_RIGHT, -abs(angle));
 }
@@ -418,20 +419,20 @@ void steerLeft(float angle) { steerLeft((int)angle); }
 void stop() { stopAllMotors(); }
 
 // ============================================================================
-// I2C KOMMUNIKATION (Register-basiert)
+// I2C COMMUNICATION (Register-based)
 // ============================================================================
 
 void i2cReceiveEvent(int numBytes) {
   if (numBytes < 3)
-    return; // Mindestens: Register + 2 Bytes Wert
+    return; // Minimum: Register + 2 bytes value
 
-    byte reg = Wire.read(); // Register-Adresse
+  byte reg = Wire.read(); // Register address
 
-    // Wert lesen (16-bit, Big Endian)
-    int16_t value = Wire.read() << 8;
+  // Read value (16-bit, Big Endian)
+  int16_t value = Wire.read() << 8;
   value |= Wire.read();
 
-  // In entsprechendes Register schreiben
+  // Write to corresponding register
   switch (reg) {
     case REG_SPEED:
       regSpeed = constrain(value, -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
@@ -451,13 +452,13 @@ void i2cReceiveEvent(int numBytes) {
 }
 
 void processRegisters() {
-  // Speed Register verarbeiten
+  // Process Speed Register
   if (regUpdateFlags & FLAG_SPEED_UPDATED) {
     setAllMotorsSpeed(regSpeed);
     regUpdateFlags &= ~FLAG_SPEED_UPDATED;
   }
 
-  // Steering Register verarbeiten
+  // Process Steering Register
   if (regUpdateFlags & FLAG_STEERING_UPDATED) {
     if (regSteering > 0) {
       steerRight(regSteering);
@@ -469,7 +470,7 @@ void processRegisters() {
     regUpdateFlags &= ~FLAG_STEERING_UPDATED;
   }
 
-  // Command Register verarbeiten
+  // Process Command Register
   if (regUpdateFlags & FLAG_COMMAND_UPDATED) {
     switch (regCommand) {
       case CMD_STOP:
@@ -489,7 +490,7 @@ void processRegisters() {
 }
 
 // ============================================================================
-// UPDATE FUNKTIONEN
+// UPDATE FUNCTIONS
 // ============================================================================
 
 void updateAllMotors() {
@@ -499,7 +500,7 @@ void updateAllMotors() {
 }
 
 void updateAllServos() {
-  for (byte i = 1; i < 5; i++) { // Starte bei 1 wegen Dummy
+  for (byte i = 1; i < 5; i++) { // Start at 1 due to dummy
     updateServoAngle(i);
   }
 }
@@ -514,14 +515,14 @@ void setup() {
   setupServos();
   setupI2C();
 
-  delay(2000);  // Startpause
+  delay(2000);  // Startup pause
 }
 
 void loop() {
-  // I2C Register verarbeiten
+  // Process I2C registers
   processRegisters();
 
-  // Motoren & Servos aktualisieren (Rampen)
+  // Update motors & servos (ramps)
   updateAllMotors();
   updateAllServos();
 

@@ -1,3 +1,13 @@
+/*
+ * MC1 - Function Declarations
+ * 4-Wheel Stepper Car - Drive & Steering
+ * 
+ * Author: Herbert Kozuschnik
+ * License: GPLv3 ( https://www.gnu.org/licenses/gpl-3.0.html.en )
+ * Date: 2026-01-24
+ * Version: 0.3
+ */
+
 #pragma once
 
 void setupTimer();
@@ -29,5 +39,4 @@ void steerRight(int angle);
 void steerRight(float angle);
 void stop();
 void i2cReceiveEvent(int numBytes);   
-void processRegisters();  
-
+void processRegisters();
