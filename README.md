@@ -44,7 +44,9 @@ Communication between the MCUs is handled via a dedicated interface (details in 
 ## Repository Structure
 
 src/
+
 ├── mcu_motion/ # LGT8F328P: Low-level motor control, steering
+
 ├── mcu_control/ # ESP32 Wroom: High-level control, planning & autonomy
 
 
