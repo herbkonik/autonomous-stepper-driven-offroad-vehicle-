@@ -50,3 +50,7 @@ src/
 ├── mcu_control/ # ESP32 Wroom: High-level control, planning & autonomy
 
 
+
+## License
+This project is licensed under the GNU GPLv3.
+
