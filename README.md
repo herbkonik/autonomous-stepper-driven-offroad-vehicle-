@@ -1,5 +1,6 @@
 # Autonomous Stepper-Driven Off-Road Vehicle
 
+<img width="800" height="491" alt="RDS-Carrier_02" src="https://github.com/user-attachments/assets/cd4c19a0-782f-4926-b813-53f46fde71f7" />
 
 
 Experimental autonomous off-road vehicle using stepper motors with advanced control
