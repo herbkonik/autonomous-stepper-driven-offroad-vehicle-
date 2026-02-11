@@ -53,13 +53,13 @@ constexpr float DISTANCE_P_GAIN = 0.15;
 constexpr float MIN_ANGLE_CORRECTION = 2.0;  // ±2° dead zone
 
 // P-gain: Gain for angle-based steering
-constexpr float ANGLE_P_GAIN = 2.0;  // Degrees steering per degree angle
+constexpr float ANGLE_P_GAIN = 1.0;  // Degrees steering per degree angle
 
 // I-gain: Gain for error integral (accumulated angle error)
-constexpr float ANGLE_I_GAIN = 0.3;  // Degrees steering per (degree × second)
+constexpr float ANGLE_I_GAIN = 0.5;  // Degrees steering per (degree × second)
 
 // Anti-Windup: Maximum I-component (prevents overshoot)
-constexpr float ANGLE_I_LIMIT = 10.0;  // Max ±10° steering from I-component
+constexpr float ANGLE_I_LIMIT = 8.0;  // Max ±8° steering from I-component
 
 // ============================================================================
 // WEIGHTING DISTANCE vs. ANGLE
@@ -67,7 +67,7 @@ constexpr float ANGLE_I_LIMIT = 10.0;  // Max ±10° steering from I-component
 
 // How much distance vs. angle is weighted (0.0 - 1.0)
 // 0.0 = only distance, 1.0 = only angle, 0.5 = equal
-constexpr float ANGLE_WEIGHT = 0.4;  // 40% angle, 60% distance
+constexpr float ANGLE_WEIGHT = 0.3;  // 30% angle, 70% distance
 
 // ============================================================================
 // DYNAMIC SPEED CONTROL

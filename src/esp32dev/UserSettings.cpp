@@ -17,7 +17,7 @@
 int16_t targetWallDistance = 200;
 
 // Driving speed (Steps/s)
-int16_t driveSpeed = 400;
+int16_t driveSpeed = 500;
 
 // Maximum steering angle (degrees)
-int16_t maxSteeringAngle = 25;
+int16_t maxSteeringAngle = 40;

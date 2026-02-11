@@ -4,7 +4,7 @@
  * Hardware:
  * - LGT8F328P LQFP48 MiniEVB (16MHz, 3.3V)
  * - 4× NEMA17 Stepper with MKS Servo42C (FOC)
- * - 4× MG946R Servos (Steering)
+ * - 4× MG946R Servos (Steering) 
  *
  * Features:
  * - Timer-controlled motor management (non-blocking)
@@ -23,6 +23,7 @@
 #include <Arduino.h>
 #include <ServoTimer2.h>
 #include <Wire.h>
+#include <math.h>
 #include "Functions.h"
 
 // ============================================================================
@@ -67,19 +68,22 @@ constexpr unsigned long SERVO_RAMP_INTERVAL = 20; // ms between steps
 // Vehicle Parameters
 constexpr int AXLE_TRACK = 370;    // mm (distance wheel center - wheel center)
 constexpr int AXLE_DISTANCE = 450; // mm (distance front - rear axle)
+constexpr float rearAngleFactor = 1.0; // 0.x = Rear wheels steer less than front
 
 // I2C Configuration
 constexpr byte I2C_ADDRESS = 0x10;
 
 // I2C Register Addresses (writable by MC2)
-constexpr byte REG_SPEED = 0x01;    // Speed Register (-800 to +800 Steps/s)
-constexpr byte REG_STEERING = 0x02; // Steering Register (-90 to +90 degrees)
-constexpr byte REG_COMMAND = 0x03;  // Command Register (special commands)
+constexpr byte REG_SPEED = 0x01;     // Speed Register (0 to 800 Steps/s, always positive)
+constexpr byte REG_DIRECTION = 0x02;   // Direction Register (0=Forward, 1=Backward)
+constexpr byte REG_STEERING = 0x03;   // Steering Register (-90 to +90 degrees)
+constexpr byte REG_COMMAND = 0x04;     // Command Register (special commands)
 
 // Update Flags (which registers were updated?)
 constexpr uint8_t FLAG_SPEED_UPDATED = 0x01;
-constexpr uint8_t FLAG_STEERING_UPDATED = 0x02;
-constexpr uint8_t FLAG_COMMAND_UPDATED = 0x04;
+constexpr uint8_t FLAG_DIRECTION_UPDATED = 0x02;
+constexpr uint8_t FLAG_STEERING_UPDATED = 0x04;
+constexpr uint8_t FLAG_COMMAND_UPDATED = 0x08;
 
 // Command Codes for REG_COMMAND
 constexpr uint8_t CMD_STOP = 0x01;            // Normal stop (with ramp)
@@ -123,10 +127,11 @@ Motor motors[4];
 ServoControl servos[5]; // 5 instead of 4 due to dummy servo
 
 // I2C Registers (writable by MC2 via I2C)
-volatile int16_t regSpeed = 0;       // Target speed (-800 to +800)
-volatile int16_t regSteering = 0;    // Target steering angle (-90 to +90)
-volatile uint8_t regCommand = 0;     // Special commands
-volatile uint8_t regUpdateFlags = 0; // Flags which registers were updated
+volatile int16_t regSpeed = 0;         // Target speed (0 to 800, always positive)
+volatile uint8_t regDirection = 0;     // Direction (0=Forward, 1=Backward)
+volatile int16_t regSteering = 0;      // Target steering angle (-90 to +90)
+volatile uint8_t regCommand = 0;       // Special commands
+volatile uint8_t regUpdateFlags = 0;    // Flags which registers were updated
 
 // ============================================================================
 // TIMER1 INTERRUPT (Motor Control)
@@ -249,18 +254,20 @@ void updateMotorSpeed(byte motorID) {
     m.running = false;
     digitalWrite(m.stepPin, LOW);
   } else {
-    // Set direction - WITH INVERSION FOR LEFT SIDE
-    bool direction = m.currentSpeed > 0;
+    // Set direction based on global direction register
+    // 0 = Forward (LOW), 1 = Backward (HIGH)
+    bool direction = (regDirection == 0);  // true for forward, false for backward
 
-    // Invert left side (otherwise left/right run opposite)
-    if (motorID == MOTOR_FRONT_LEFT || motorID == MOTOR_REAR_LEFT) {
+    // Configure DIR pins so that forward = LOW for all motors
+    // Based on current motor wiring, we need to invert the right side
+    if (motorID == MOTOR_FRONT_RIGHT || motorID == MOTOR_REAR_RIGHT) {
       direction = !direction;
     }
 
-    digitalWrite(m.dirPin, direction ? HIGH : LOW);
+    digitalWrite(m.dirPin, direction ? LOW : HIGH);
 
-    // Calculate step delay
-    uint16_t absSpeed = abs(m.currentSpeed);
+    // Calculate step delay (speed is always positive now)
+    uint16_t absSpeed = m.currentSpeed;  // No abs() needed anymore
     m.stepDelay = 500000UL / absSpeed; // Microseconds
     m.running = true;
   }
@@ -375,12 +382,113 @@ void emergencyStopAll() {
 void centerAllSteering() { setAllSteering(0); }
 
 // ============================================================================
+// ACKERMANN CALCULATIONS
+// ============================================================================
+
+struct AckermannAngles {
+  float frontLeft;
+  float frontRight;
+  float rearLeft;
+  float rearRight;
+};
+
+struct AckermannSpeeds {
+  float leftSpeed;
+  float rightSpeed;
+};
+
+// Calculate Ackermann steering angles for inner and outer wheels
+// innerAngle: Steering angle for inner wheels (degrees from MC2)
+// Returns: Individual steering angles for all four wheels
+AckermannAngles calculateAckermannAngles(float innerAngle) {
+  AckermannAngles angles;
+  
+  if (abs(innerAngle) < 0.1) {
+    // Nearly straight - all wheels same angle
+    angles.frontLeft = angles.frontRight = 0.0;
+    angles.rearLeft = angles.rearRight = 0.0;
+    return angles;
+  }
+  
+  // Convert to radians for calculation
+  float innerAngleRad = abs(innerAngle) * M_PI / 180.0;
+  
+  // Calculate turning radius for inner wheels
+  // Using simplified Ackermann: tan(steering_angle) = wheelbase / turning_radius
+  float innerRadius = AXLE_DISTANCE / tan(innerAngleRad);
+  
+  // Calculate turning radius for outer wheels (inner radius + track width)
+  float outerRadius = innerRadius + AXLE_TRACK;
+  
+  // Calculate steering angles for outer wheels
+  float outerAngleRad = atan(AXLE_DISTANCE / outerRadius);
+  float outerAngle = outerAngleRad * 180.0 / M_PI;
+  
+  // Front axle: inner wheels steer more than outer wheels
+  // NOTE: Inverted steering logic like old functions (positive = left, negative = right)
+  if (innerAngle > 0) {
+    // Turning right (positive input): front-right is inner, front-left is outer
+    // But steering direction is inverted: positive = left, negative = right
+    angles.frontRight = -abs(innerAngle);  // Inner wheel: steer right (negative)
+    angles.frontLeft = -outerAngle;        // Outer wheel: steer right (negative)
+  } else {
+    // Turning left (negative input): front-left is inner, front-right is outer  
+    // But steering direction is inverted: positive = left, negative = right
+    angles.frontLeft = abs(innerAngle);   // Inner wheel: steer left (positive)
+    angles.frontRight = outerAngle;        // Outer wheel: steer left (positive)
+  }
+  
+  // Rear axle: simplified - opposite direction with smaller angles
+  angles.rearLeft = -angles.frontLeft * rearAngleFactor;
+  angles.rearRight = -angles.frontRight * rearAngleFactor;
+  
+  return angles;
+}
+
+// Calculate differential speeds for inner and outer wheels
+// baseSpeed: Base speed for straight driving (steps/s)
+// innerAngle: Steering angle for inner wheels (degrees)
+// Returns: Individual speeds for left and right sides
+AckermannSpeeds calculateDifferentialSpeeds(int baseSpeed, float innerAngle) {
+  AckermannSpeeds speeds;
+  
+  if (abs(innerAngle) < 0.1) {
+    // Nearly straight - same speed for both sides
+    speeds.leftSpeed = speeds.rightSpeed = baseSpeed;
+    return speeds;
+  }
+  
+  // Convert to radians
+  float innerAngleRad = abs(innerAngle) * M_PI / 180.0;
+  
+  // Calculate turning radius for inner wheels
+  float innerRadius = AXLE_DISTANCE / tan(innerAngleRad);
+  float outerRadius = innerRadius + AXLE_TRACK;
+  
+  // Calculate speed ratio (outer wheels travel faster)
+  float speedRatio = outerRadius / innerRadius;
+  
+  // Apply speeds based on turning direction
+  if (innerAngle > 0) {
+    // Turning right: right side is inner, left side is outer
+    speeds.rightSpeed = baseSpeed;
+    speeds.leftSpeed = baseSpeed * speedRatio;
+  } else {
+    // Turning left: left side is inner, right side is outer
+    speeds.leftSpeed = baseSpeed;
+    speeds.rightSpeed = baseSpeed * speedRatio;
+  }
+  
+  return speeds;
+}
+
+// ============================================================================
 // HIGH-LEVEL FUNCTIONS (Driving Maneuvers)
 // ============================================================================
 
-void driveForward(int speed) { setAllMotorsSpeed(-speed); }
+void driveForward(int speed) { setAllMotorsSpeed(speed); }
 
-void driveBackward(int speed) { setAllMotorsSpeed(speed); }
+void driveBackward(int speed) { setAllMotorsSpeed(-speed); }
 
 void turnLeft(int baseSpeed, int speedDifference) {
   setLeftSideSpeed(baseSpeed - speedDifference);
@@ -416,6 +524,58 @@ void steerLeft(int angle) {
 
 void steerLeft(float angle) { steerLeft((int)angle); }
 
+// ============================================================================
+// ACKERMANN-BASED DRIVING FUNCTIONS
+// ============================================================================
+
+// Set individual steering angles using Ackermann geometry
+// innerAngle: Steering angle for inner wheels (degrees from MC2)
+void setAckermannSteering(float innerAngle) {
+  AckermannAngles angles = calculateAckermannAngles(innerAngle);
+  
+  // Apply calculated angles to individual servos
+  setServoAngle(SERVO_FRONT_LEFT, angles.frontLeft);
+  setServoAngle(SERVO_FRONT_RIGHT, angles.frontRight);
+  setServoAngle(SERVO_REAR_LEFT, angles.rearLeft);
+  setServoAngle(SERVO_REAR_RIGHT, angles.rearRight);
+}
+
+// Drive with Ackermann steering and differential speeds
+// baseSpeed: Base speed for straight driving (steps/s)
+// innerAngle: Steering angle for inner wheels (degrees)
+void driveWithAckermann(int baseSpeed, float innerAngle) {
+  // Calculate differential speeds
+  AckermannSpeeds speeds = calculateDifferentialSpeeds(baseSpeed, innerAngle);
+  
+  // Apply speeds to left and right sides (positive for forward - corrected)
+  setLeftSideSpeed(speeds.leftSpeed);
+  setRightSideSpeed(speeds.rightSpeed);
+  
+  // Apply Ackermann steering
+  setAckermannSteering(innerAngle);
+}
+
+// Combined function for complete Ackermann driving
+// speed: Target speed (steps/s, positive = forward)
+// steering: Steering angle for inner wheels (degrees, positive = right)
+void driveAckermann(int speed, float steering) {
+  if (speed == 0) {
+    // Stop vehicle
+    stopAllMotors();
+    centerAllSteering();
+    return;
+  }
+  
+  if (abs(steering) < 0.1) {
+    // Nearly straight - simple forward driving
+    driveForward(speed);
+    centerAllSteering();
+  } else {
+    // Use Ackermann geometry for turning
+    driveWithAckermann(speed, steering);  // Back to positive speed
+  }
+}
+
 void stop() { stopAllMotors(); }
 
 // ============================================================================
@@ -435,8 +595,13 @@ void i2cReceiveEvent(int numBytes) {
   // Write to corresponding register
   switch (reg) {
     case REG_SPEED:
-      regSpeed = constrain(value, -MAX_MOTOR_SPEED, MAX_MOTOR_SPEED);
+      regSpeed = constrain(value, 0, MAX_MOTOR_SPEED);  // Always positive now
       regUpdateFlags |= FLAG_SPEED_UPDATED;
+      break;
+
+    case REG_DIRECTION:
+      regDirection = constrain(value, 0, 1);  // 0=Forward, 1=Backward
+      regUpdateFlags |= FLAG_DIRECTION_UPDATED;
       break;
 
     case REG_STEERING:
@@ -454,19 +619,20 @@ void i2cReceiveEvent(int numBytes) {
 void processRegisters() {
   // Process Speed Register
   if (regUpdateFlags & FLAG_SPEED_UPDATED) {
-    setAllMotorsSpeed(regSpeed);
+    // Speed is now processed together with steering in driveAckermann()
     regUpdateFlags &= ~FLAG_SPEED_UPDATED;
+  }
+
+  // Process Direction Register
+  if (regUpdateFlags & FLAG_DIRECTION_UPDATED) {
+    // Direction will be applied in next motor update
+    regUpdateFlags &= ~FLAG_DIRECTION_UPDATED;
   }
 
   // Process Steering Register
   if (regUpdateFlags & FLAG_STEERING_UPDATED) {
-    if (regSteering > 0) {
-      steerRight(regSteering);
-    } else if (regSteering < 0) {
-      steerLeft(-regSteering);
-    } else {
-      centerAllSteering();
-    }
+    // Use Ackermann driving with combined speed and steering
+    driveAckermann(regSpeed, regSteering);
     regUpdateFlags &= ~FLAG_STEERING_UPDATED;
   }
 

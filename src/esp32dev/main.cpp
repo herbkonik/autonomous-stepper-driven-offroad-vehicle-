@@ -1,5 +1,5 @@
 /*
- * MC2 - Main Program (Dual-Core)
+ * MC2 - Main Program (Dual-Core)  
  * 
  * Hardware:
  * - ESP32-WROOM-32U (Dual-Core!)

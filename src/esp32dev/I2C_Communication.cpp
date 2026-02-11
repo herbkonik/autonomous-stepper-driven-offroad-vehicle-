@@ -32,11 +32,15 @@ void sendI2CRegister(uint8_t reg, int16_t value) {
 }
 
 // ============================================================================
-// HIGH-LEVEL COMMANDS
+// HIGH-LEVEL COMMANDS 
 // ============================================================================
 
 void setSpeed(int16_t speed) {
   sendI2CRegister(REG_SPEED, speed);
+}
+
+void setDirection(bool forward) {
+  sendI2CRegister(REG_DIRECTION, forward ? 0 : 1);
 }
 
 void setSteering(int16_t angle) {
@@ -52,11 +56,13 @@ void sendCommand(uint8_t cmd) {
 // ============================================================================
 
 void driveForward(int16_t speed) {
-  setSpeed(-speed);  // Negative = Forward in MC1
+  setSpeed(speed);      // Positive speed
+  setDirection(true);   // true = forward
 }
 
 void driveBackward(int16_t speed) {
-  setSpeed(speed);   // Positive = Backward in MC1
+  setSpeed(speed);      // Positive speed
+  setDirection(false);  // false = backward
 }
 
 void stopVehicle() {

@@ -26,6 +26,7 @@ void sendI2CRegister(uint8_t reg, int16_t value);
 
 // High-Level Commands
 void setSpeed(int16_t speed);
+void setDirection(bool forward);
 void setSteering(int16_t angle);
 void sendCommand(uint8_t cmd);
 

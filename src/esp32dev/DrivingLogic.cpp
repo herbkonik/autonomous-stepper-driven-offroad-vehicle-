@@ -4,7 +4,7 @@
  * 
  * Author: Herbert Kozuschnik
  * License: GPLv3 ( https://www.gnu.org/licenses/gpl-3.0.html.en )
- * Date: 2026-01-28
+ * Date: 2026-02-10
  * Version: 2.1 (PI Controller for angle control)
  */
 
@@ -119,9 +119,77 @@ WallSide detectWall(const int16_t* distances) {
   // 0: L-Side-R, 1: L-Rear, 2: R-Rear, 3: R-Side-R
   // 4: R-Side-F, 5: R-Front, 6: L-Side-F, 7: L-Front
   
-  // Center side sensors for wall detection
-  int16_t leftSide = distances[6];   // L-Side-Front
-  int16_t rightSide = distances[4];  // R-Side-Front
+  // Take 5 measurements for side sensors with 20ms pause for robust detection
+  const int NUM_MEASUREMENTS = 5;
+  const int MEASUREMENT_DELAY = 20; // ms between measurements
+  
+  int16_t leftSideFront[NUM_MEASUREMENTS];
+  int16_t leftSideRear[NUM_MEASUREMENTS];
+  int16_t rightSideFront[NUM_MEASUREMENTS];
+  int16_t rightSideRear[NUM_MEASUREMENTS];
+  
+  // Perform 5 measurement rounds with fresh sensor data each time
+  for (int round = 0; round < NUM_MEASUREMENTS; round++) {
+    // Get fresh sensor data from Core 0
+    int16_t freshDistances[8];
+    getSensorData(freshDistances);
+    
+    // Store side sensor values
+    leftSideFront[round] = freshDistances[6];  // L-Side-F
+    leftSideRear[round] = freshDistances[0];   // L-Side-R
+    rightSideFront[round] = freshDistances[4]; // R-Side-F
+    rightSideRear[round] = freshDistances[3];  // R-Side-R
+    
+    if (round < NUM_MEASUREMENTS - 1) {
+      delay(MEASUREMENT_DELAY);  // Give Core 0 time for next measurement
+    }
+  }
+  
+  // Calculate median for each sensor
+  int16_t leftSideFrontMedian = calculateMedian(leftSideFront, NUM_MEASUREMENTS);
+  int16_t leftSideRearMedian = calculateMedian(leftSideRear, NUM_MEASUREMENTS);
+  int16_t rightSideFrontMedian = calculateMedian(rightSideFront, NUM_MEASUREMENTS);
+  int16_t rightSideRearMedian = calculateMedian(rightSideRear, NUM_MEASUREMENTS);
+  
+  // Check if enough valid measurements (3 out of 5 must be > 0)
+  int leftValidCount = 0;
+  if (leftSideFrontMedian > 0) leftValidCount++;
+  if (leftSideRearMedian > 0) leftValidCount++;
+  
+  int rightValidCount = 0;
+  if (rightSideFrontMedian > 0) rightValidCount++;
+  if (rightSideRearMedian > 0) rightValidCount++;
+  
+  if (leftValidCount < 2) {  // Need at least 2 valid sensors per side
+    return NO_WALL;  // Not enough valid left measurements
+  }
+  if (rightValidCount < 2) {
+    return NO_WALL;  // Not enough valid right measurements
+  }
+  
+  // Calculate average for each side from valid measurements
+  int16_t leftSide = 0, rightSide = 0;
+  int leftCount = 0, rightCount = 0;
+  
+  if (leftSideFrontMedian > 0) {
+    leftSide += leftSideFrontMedian;
+    leftCount++;
+  }
+  if (leftSideRearMedian > 0) {
+    leftSide += leftSideRearMedian;
+    leftCount++;
+  }
+  if (leftCount > 0) leftSide /= leftCount;
+  
+  if (rightSideFrontMedian > 0) {
+    rightSide += rightSideFrontMedian;
+    rightCount++;
+  }
+  if (rightSideRearMedian > 0) {
+    rightSide += rightSideRearMedian;
+    rightCount++;
+  }
+  if (rightCount > 0) rightSide /= rightCount;
   
   // Validation (ignore errors, only valid ranges)
   bool leftValid = (leftSide > WALL_DETECTION_MIN && leftSide < WALL_DETECTION_MAX);
@@ -139,8 +207,29 @@ WallSide detectWall(const int16_t* distances) {
     return RIGHT_WALL;  // Only right wall
   }
   
-  // Both walls detected -> preference RIGHT
-  return RIGHT_WALL;
+  // Both walls detected -> choose CLOSER wall (more stable)
+  if (leftSide < rightSide) {
+    return LEFT_WALL;   // Left wall is closer
+  } else {
+    return RIGHT_WALL;  // Right wall is closer or equal
+  }
+}
+
+// Helper function to calculate median of an array
+int16_t calculateMedian(int16_t* array, int size) {
+  // Simple bubble sort for small arrays
+  for (int i = 0; i < size - 1; i++) {
+    for (int j = 0; j < size - i - 1; j++) {
+      if (array[j] > array[j + 1]) {
+        int16_t temp = array[j];
+        array[j] = array[j + 1];
+        array[j + 1] = temp;
+      }
+    }
+  }
+  
+  // Return median (middle element for odd size)
+  return array[size / 2];
 }
 
 void initializeDriving(const int16_t* distances) {
@@ -182,19 +271,21 @@ void initializeDriving(const int16_t* distances) {
 // ============================================================================
 
 int16_t calculateDynamicSpeed(const int16_t* distances) {
+  // Get fresh sensor data from Core 0
+  int16_t freshDistances[8];
+  getSensorData(freshDistances);
+  
   // Front sensors
-  int16_t frontLeft = distances[7];   // L-Front
-  int16_t frontRight = distances[5];  // R-Front
+  int16_t frontLeft = freshDistances[7];   // L-Front
+  int16_t frontRight = freshDistances[5];  // R-Front
   
-  // Find smallest valid distance
-  int16_t minFrontDistance = MAX_DISTANCE_MM;
+  // For front sensors: No echo = no obstacle = maximum distance
+  // Treat invalid/timeout values as maximum distance (free path)
+  if (frontLeft <= 0) frontLeft = MAX_DISTANCE_MM;
+  if (frontRight <= 0) frontRight = MAX_DISTANCE_MM;
   
-  if (frontLeft > 0 && frontLeft < minFrontDistance) {
-    minFrontDistance = frontLeft;
-  }
-  if (frontRight > 0 && frontRight < minFrontDistance) {
-    minFrontDistance = frontRight;
-  }
+  // Find smallest valid distance (closest obstacle)
+  int16_t minFrontDistance = min(frontLeft, frontRight);
   
   // Speed based on distance
   int16_t targetSpeed = driveSpeed;
@@ -210,7 +301,7 @@ int16_t calculateDynamicSpeed(const int16_t* distances) {
   } else if (minFrontDistance < SPEED_REDUCE_START) {
     targetSpeed = driveSpeed * 0.90;  // 90% speed
   }
-  // else: full speed
+  // else: full speed (no obstacle detected)
   
   return targetSpeed;
 }
@@ -223,15 +314,19 @@ WallMeasurement measureWall(const int16_t* distances, WallSide side) {
   WallMeasurement wall;
   wall.valid = false;
   
+  // Get fresh sensor data from Core 0
+  int16_t freshDistances[8];
+  getSensorData(freshDistances);
+  
   if (side == LEFT_WALL) {
     // Left wall: Front = 6 (L-Side-F), Rear = 0 (L-Side-R)
-    wall.frontDistance = distances[6];
-    wall.rearDistance = distances[0];
+    wall.frontDistance = freshDistances[6];
+    wall.rearDistance = freshDistances[0];
     
   } else if (side == RIGHT_WALL) {
     // Right wall: Front = 4 (R-Side-F), Rear = 3 (R-Side-R)
-    wall.frontDistance = distances[4];
-    wall.rearDistance = distances[3];
+    wall.frontDistance = freshDistances[4];
+    wall.rearDistance = freshDistances[3];
     
   } else {
     return wall;  // NO_WALL
@@ -382,7 +477,7 @@ void executeDriving(const int16_t* distances) {
   }
   
   // Drive with dynamic speed
-  driveForward(targetSpeed);
+  driveForward(targetSpeed);  // Use driveForward for correct direction
   setSteering(steeringAngle);
   systemState.currentSpeed = targetSpeed;
   

@@ -66,9 +66,10 @@ constexpr uint8_t I2C_SCL_PIN = 22;
 constexpr uint32_t I2C_CLOCK = 100000;  // 100kHz
 
 // MC1 Register Addresses
-constexpr uint8_t REG_SPEED = 0x01;
-constexpr uint8_t REG_STEERING = 0x02;
-constexpr uint8_t REG_COMMAND = 0x03;
+constexpr uint8_t REG_SPEED = 0x01;     // Speed Register (0 to 800, always positive)
+constexpr uint8_t REG_DIRECTION = 0x02;   // Direction Register (0=Forward, 1=Backward)
+constexpr uint8_t REG_STEERING = 0x03;   // Steering Register (-90 to +90 degrees)
+constexpr uint8_t REG_COMMAND = 0x04;     // Command Register
 
 // MC1 Command Codes
 constexpr uint8_t CMD_STOP = 0x01;
