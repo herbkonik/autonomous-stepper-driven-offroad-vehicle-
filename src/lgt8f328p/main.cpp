@@ -16,8 +16,8 @@
  *
  * Author: Herbert Kozuschnik
  * License: GPLv3 ( https://www.gnu.org/licenses/gpl-3.0.html.en )
- * Date: 2026-01-24
- * Version: 0.3 (I2C Slave - Production)
+ * Date: 2026-02-21
+ * Version: 0.4 (I2C Slave - Production)
  */
 
 #include <Arduino.h>
@@ -576,7 +576,10 @@ void driveAckermann(int speed, float steering) {
   }
 }
 
-void stop() { stopAllMotors(); }
+void stop() { 
+  regSpeed = 0;  // ⚠️ WICHTIG: Speed-Register zurücksetzen!
+  stopAllMotors(); 
+}
 
 // ============================================================================
 // I2C COMMUNICATION (Register-based)

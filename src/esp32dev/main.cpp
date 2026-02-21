@@ -1,5 +1,5 @@
 /*
- * MC2 - Main Program (Dual-Core)  
+ * MC2 - Main Program (Dual-Core) 
  * 
  * Hardware:
  * - ESP32-WROOM-32U (Dual-Core!)
@@ -61,6 +61,11 @@ void setup() {
   // Initialize sensors
   showInitStatus("Init Sensors...");
   setupSensors();
+  delay(500);
+  
+  // Initialize test mode
+  showInitStatus("Init Test Mode...");
+  setupTestMode();
   delay(500);
   
   // Start sensor task on Core 1

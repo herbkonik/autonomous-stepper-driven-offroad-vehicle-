@@ -48,6 +48,11 @@ struct WallMeasurement {
   float angleToWall;       // Angle to wall (in degrees)
   int16_t avgDistance;     // Average distance
   bool valid;              // Measurement valid
+  
+  // New fields for intelligent wall detection
+  bool frontJumped;        // Front sensor jumped 50%+ or to error
+  bool rearJumped;         // Rear sensor jumped 50%+ or to error
+  bool bothLost;           // Both sensors lost wall
 };
 
 // Structure for system state
@@ -74,6 +79,7 @@ void autonomousDrive(const int16_t* distances);
 // Initialization
 void initializeDriving(const int16_t* distances);
 WallSide detectWall(const int16_t* distances);
+void setupTestMode();
 
 // Sensor Management
 void activateSensorsForWall(WallSide wall);
@@ -84,6 +90,7 @@ void executeDriving(const int16_t* distances);
 int16_t calculateDynamicSpeed(const int16_t* distances);
 WallMeasurement measureWall(const int16_t* distances, WallSide side);
 int16_t calculateSteering(const WallMeasurement& wall);
+void resetSensorHistory();
 void resetSteeringIntegral();  // Resets I-component
 
 // Helper Functions

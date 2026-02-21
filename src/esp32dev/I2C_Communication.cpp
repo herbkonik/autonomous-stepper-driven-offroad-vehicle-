@@ -40,7 +40,7 @@ void setSpeed(int16_t speed) {
 }
 
 void setDirection(bool forward) {
-  sendI2CRegister(REG_DIRECTION, forward ? 0 : 1);
+  sendI2CRegister(REG_DIRECTION, forward ? 1 : 0);
 }
 
 void setSteering(int16_t angle) {

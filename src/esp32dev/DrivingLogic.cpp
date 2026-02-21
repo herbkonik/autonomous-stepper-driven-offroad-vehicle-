@@ -25,6 +25,11 @@ SystemState systemState = {
 static float angleErrorIntegral = 0.0;
 static unsigned long lastSteeringUpdateTime = 0;
 
+// Previous sensor values for jump detection
+static int16_t prevFrontDistance = 0;
+static int16_t prevRearDistance = 0;
+static bool firstMeasurement = true;
+
 // ============================================================================
 // TEST SEQUENCE (unchanged from previous version)
 // ============================================================================
@@ -40,8 +45,8 @@ void runTestSequence() {
     switch (testPhase) {
     case 1:
       // Drive forward
-      showDriveStatus("Forward 200");
-      driveForward(200);
+      showDriveStatus("Forward 300");
+      driveForward(300);
       setSteering(0);
       break;
       
@@ -64,6 +69,12 @@ void runTestSequence() {
       break;
       
     case 5:
+      // Straight
+      showDriveStatus("Straight");
+      setSteering(0);
+      break;
+     
+    case 6:
       // Stop
       showDriveStatus("Stop");
       stopVehicle();
@@ -313,6 +324,9 @@ int16_t calculateDynamicSpeed(const int16_t* distances) {
 WallMeasurement measureWall(const int16_t* distances, WallSide side) {
   WallMeasurement wall;
   wall.valid = false;
+  wall.frontJumped = false;
+  wall.rearJumped = false;
+  wall.bothLost = false;
   
   // Get fresh sensor data from Core 0
   int16_t freshDistances[8];
@@ -332,27 +346,61 @@ WallMeasurement measureWall(const int16_t* distances, WallSide side) {
     return wall;  // NO_WALL
   }
   
+  // Jump detection (only after first measurement)
+  if (!firstMeasurement) {
+    // Check front sensor for 50%+ jump or to error
+    if (prevFrontDistance > 0) {
+      if (wall.frontDistance <= 0) {
+        wall.frontJumped = true;  // Jump to error
+      } else {
+        float change = abs(wall.frontDistance - prevFrontDistance) / (float)prevFrontDistance;
+        if (change >= 0.5) {
+          wall.frontJumped = true;  // 50%+ jump
+        }
+      }
+    }
+    
+    // Check rear sensor for 50%+ jump or to error
+    if (prevRearDistance > 0) {
+      if (wall.rearDistance <= 0) {
+        wall.rearJumped = true;  // Jump to error
+      } else {
+        float change = abs(wall.rearDistance - prevRearDistance) / (float)prevRearDistance;
+        if (change >= 0.5) {
+          wall.rearJumped = true;  // 50%+ jump
+        }
+      }
+    }
+  }
+  
+  // Store current values for next comparison
+  prevFrontDistance = wall.frontDistance;
+  prevRearDistance = wall.rearDistance;
+  firstMeasurement = false;
+  
   // Validation
   bool frontValid = (wall.frontDistance > 0);
   bool rearValid = (wall.rearDistance > 0);
   
-  // Both sensors invalid → error
+  // Both sensors invalid → check if both lost wall
   if (!frontValid && !rearValid) {
-    return wall;  // Both sensors error
+    wall.bothLost = true;
+    wall.valid = false;  // Will be handled in executeDriving
+    return wall;
   }
   
-  // CORNERING: Only front sensor has echo (rear loses wall)
-  if (frontValid && !rearValid) {
-    wall.avgDistance = wall.frontDistance;
+  // WALL END: Only rear sensor has echo (front reached wall end first)
+  if (!frontValid && rearValid) {
+    wall.avgDistance = wall.rearDistance;
     wall.angleToWall = 0.0;  // No angle calculable, only distance
     wall.valid = true;
     return wall;
   }
   
-  // Only rear sensor (shouldn't happen, but for safety)
-  if (!frontValid && rearValid) {
-    wall.avgDistance = wall.rearDistance;
-    wall.angleToWall = 0.0;
+  // CORNERING: Only front sensor has echo (rear loses wall in curve)
+  if (frontValid && !rearValid) {
+    wall.avgDistance = wall.frontDistance;
+    wall.angleToWall = 0.0;  // No angle calculable, only distance
     wall.valid = true;
     return wall;
   }
@@ -462,9 +510,43 @@ void executeDriving(const int16_t* distances) {
   // Perform wall measurement
   WallMeasurement wall = measureWall(distances, systemState.selectedWall);
   
+  // Handle intelligent wall detection cases
   if (!wall.valid) {
-    showDriveStatus("Sensor Error");
-    stopVehicle();
+    if (wall.bothLost) {
+      // Both sensors lost wall - drive slowly forward
+      showDriveStatus("Wall Lost - Slow");
+      driveForward(targetSpeed / 3);  // Reduce speed to 1/3
+      centerSteering();
+      return;
+    } else {
+      // Other sensor errors
+      showDriveStatus("Sensor Error");
+      stopVehicle();
+      return;
+    }
+  }
+  
+  // Handle jump cases with reduced speed
+  int16_t adjustedSpeed = targetSpeed;
+  if (wall.frontJumped || wall.rearJumped) {
+    adjustedSpeed = targetSpeed / 2;  // Reduce speed to 1/2 for "thinking time"
+    showDriveStatus("Jump Detected - Slow");
+  }
+  
+  // Special handling for jump cases
+  if (wall.frontJumped && !wall.rearJumped) {
+    // Case 1: Front jumped 50%+ or to error (closed recessed door)
+    // Ignore and continue straight
+    driveForward(adjustedSpeed);
+    centerSteering();
+    return;
+  }
+  
+  if (wall.frontJumped && wall.rearJumped) {
+    // Case 2: Both jumped - check if front recovers
+    // This will be handled in next measurement cycle
+    driveForward(adjustedSpeed);
+    centerSteering();
     return;
   }
   
@@ -476,19 +558,38 @@ void executeDriving(const int16_t* distances) {
     steeringAngle = -steeringAngle;
   }
   
-  // Drive with dynamic speed
-  driveForward(targetSpeed);  // Use driveForward for correct direction
+  // Drive with adjusted speed
+  driveForward(adjustedSpeed);  // Use adjusted speed for intelligent cases
   setSteering(steeringAngle);
-  systemState.currentSpeed = targetSpeed;
+  systemState.currentSpeed = adjustedSpeed;
   
   // Show status (only when speed changed)
   static int16_t lastDisplayedSpeed = 0;
-  if (abs(targetSpeed - lastDisplayedSpeed) > 20) {
+  if (abs(adjustedSpeed - lastDisplayedSpeed) > 20) {
     char status[32];
-    sprintf(status, "V=%d Dist=%d", targetSpeed, wall.avgDistance);
+    sprintf(status, "V=%d Dist=%d", adjustedSpeed, wall.avgDistance);
     showDriveStatus(status);
-    lastDisplayedSpeed = targetSpeed;
+    lastDisplayedSpeed = adjustedSpeed;
   }
+}
+
+// ============================================================================
+// SETUP FUNCTIONS
+// ============================================================================
+
+void setupTestMode() {
+  pinMode(TEST_MODE_PIN, INPUT_PULLUP);  // Pullup - LOW when connected to GND
+  resetSensorHistory();  // Reset sensor history on startup
+}
+
+// ============================================================================
+// SENSOR HISTORY RESET
+// ============================================================================
+
+void resetSensorHistory() {
+  prevFrontDistance = 0;
+  prevRearDistance = 0;
+  firstMeasurement = true;
 }
 
 // ============================================================================
@@ -496,6 +597,17 @@ void executeDriving(const int16_t* distances) {
 // ============================================================================
 
 void autonomousDrive(const int16_t* distances) {
+  // Check if test mode is active (D2 connected to GND)
+  bool testModeActive = (digitalRead(TEST_MODE_PIN) == LOW);
+  
+  if (testModeActive) {
+    // Test mode - ignore wall following logic
+    showDriveStatus("TEST MODE");
+    runTestSequence();
+    return;
+  }
+  
+  // Normal wall following logic
   switch (systemState.state) {
     
     case STATE_INIT:

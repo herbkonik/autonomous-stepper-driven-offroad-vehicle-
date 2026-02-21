@@ -106,3 +106,9 @@ constexpr uint8_t SENSOR_TASK_PRIORITY = 1;
 
 constexpr uint16_t DISPLAY_UPDATE_INTERVAL = 200;  // ms
 constexpr uint16_t TEST_SEQUENCE_INTERVAL = 3000;  // ms
+
+// ============================================================================
+// TEST MODE CONFIGURATION
+// ============================================================================
+
+constexpr uint8_t TEST_MODE_PIN = 0;  // IO0 - connect to GND for test mode
