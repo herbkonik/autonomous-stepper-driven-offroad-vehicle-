@@ -4,12 +4,12 @@
 
 
 Experimental autonomous off-road vehicle using stepper motors with advanced control
-methods. The project investigates whether stepper motors can be a viable alternative
-to DC motors for low-speed, high-torque outdoor vehicles.
+methods. The project investigates whether stepper motors can be a viable alternative to DC motors for low-speed, high-torque outdoor vehicles.
 
 ## Project Story & Build Log
 
 The project is still work in progress, a detailed project story, background, and build documentation i will add to Hackster.io. 
+
 
 ## Motivation
 
@@ -53,5 +53,7 @@ src/
 
 
 ## License
-This project is licensed under the GNU GPLv3.
 
+Software: GPLv3
+Hardware design files: CERN-OHL-S Strongly Reciprocal
+Images: CC-BY-ND 4.0
