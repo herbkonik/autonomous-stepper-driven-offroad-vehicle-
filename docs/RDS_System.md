@@ -177,9 +177,3 @@ This improves:
 - Lower obstacle capability than six-wheel systems
 
 The RDS is best described as a **low-speed, high-traction terrain system**.
-
-
-# 7. Summary Description for the Project Page
-
-> The Rocker Differential Suspension (RDS) is a four-wheel passive off-road suspension system using two rocker arms mechanically coupled via parallel, tensioned cables. The front sections are linked to front sections and the rear to rear, creating a symmetric mechanical averaging effect. This design reduces chassis pitch, maintains continuous ground contact, and maximizes robustness while keeping the mechanical complexity extremely low.
-
